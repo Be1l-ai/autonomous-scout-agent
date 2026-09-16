@@ -17,6 +17,6 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install fastapi pydantic pydantic-settings structlog beautifulsoup4 \
-                      lxml tenacity curl_cffi groq httpx pytest
+                      lxml tenacity curl_cffi groq httpx trafilatura pytest
       - name: Run tests
         run: python -m pytest tests -q
