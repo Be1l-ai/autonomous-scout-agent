@@ -1,0 +1,16 @@
+.env
+models/
+data/
+*.db
+*.db-wal
+*.db-shm
+*.gguf
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.cache/
+.pytest_cache/
+.DS_Store
+.idea/
+.vscode/
