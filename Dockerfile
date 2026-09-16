@@ -5,7 +5,7 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     HF_HOME=/app/.cache/huggingface
 
-# build-essential + cmake are only needed if the prebuilt llama-cpp wheel misses.
+# build-essential + cmake are required: llama-cpp-python is compiled from source.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential cmake git curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
@@ -16,12 +16,14 @@ WORKDIR /app
 
 COPY requirements.txt .
 
-# Try the prebuilt CPU wheel first (fast, ~30s). Fall back to compiling from
-# source with CPU-only flags if the wheel index is unavailable.
-RUN pip install --upgrade pip && \
-    (pip install -r requirements.txt \
-        --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu \
-     || CMAKE_ARGS="-DGGML_CUDA=OFF -DGGML_BLAS=OFF" pip install -r requirements.txt)
+# Always build llama-cpp-python from source rather than using a prebuilt wheel.
+# The abetlen.github.io CPU wheel index has served musl-linked builds (Alpine
+# ABI) that segfault-on-import here, because this image is glibc-based
+# (python:3.11-slim = Debian). Compiling locally guarantees the ABI matches.
+RUN pip install --upgrade pip
+RUN CMAKE_ARGS="-DGGML_CUDA=OFF -DGGML_BLAS=OFF" \
+    pip install --no-cache-dir llama-cpp-python==0.3.1
+RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
