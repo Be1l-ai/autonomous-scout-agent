@@ -20,6 +20,23 @@ DEFAULT_BLOCKLIST = (
     "youtube.com,netflix.com,spotify.com"
 )
 
+# Priority hints: URLs containing these paths get priority 1 (highest)
+LIST_HINTS = (
+    "/list",
+    "/awesome",
+    "/awesome-",
+    "/resources",
+    "/tools",
+    "/projects",
+    "/repositories",
+    "/awesome-list",
+    "/curated",
+    "/index",
+    "/catalog",
+    "/directory",
+    "/landscape",
+)
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -77,7 +94,7 @@ class Settings(BaseSettings):
     blocked_domains: str = DEFAULT_BLOCKLIST
     # Hops from a seed. The web branches ~20x per page, so this matters a lot.
     max_depth: int = 3
-    max_queue_size: int = 2000
+    max_queue_size: int = 500
     max_pages: int = 0                   # 0 = unlimited
     # Stops the agent sinking its whole budget into one chatty site.
     max_pages_per_domain: int = 25
@@ -92,6 +109,10 @@ class Settings(BaseSettings):
 
     # --- Agent goal ---------------------------------------------------------
     current_goal: str = "Find open-source AI agent frameworks and their source repositories."
+
+    # --- Control plane auth -------------------------------------------------
+    # Empty = disabled (dev mode). Set in production to secure /pause, /seed, etc.
+    control_token: str = ""
 
     # --- Runtime ------------------------------------------------------------
     autostart: bool = True
