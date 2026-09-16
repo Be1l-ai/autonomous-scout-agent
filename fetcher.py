@@ -18,6 +18,7 @@ from urllib.parse import urldefrag, urljoin, urlparse
 import structlog
 from bs4 import BeautifulSoup
 from curl_cffi import requests
+from curl_cffi.requests.errors import Timeout, ConnectionError
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 import trafilatura
 
@@ -187,7 +188,7 @@ class Fetcher:
     @retry(
         stop=stop_after_attempt(2),
         wait=wait_exponential(multiplier=1, min=2, max=5),
-        retry=retry_if_exception_type((requests.exceptions.Timeout, requests.exceptions.ConnectionError))
+        retry=retry_if_exception_type((Timeout, ConnectionError))
     )
     def fetch_and_parse(self, url: str) -> FetchResult:
         logger.info("fetching_url", url=url)
