@@ -44,7 +44,7 @@ class Settings(BaseSettings):
     # --- Worker (Groq) ------------------------------------------------------
     worker_provider: str = "groq"
     worker_api_key: str = Field(default="")
-    worker_model: str = "llama-3.1-8b-instant"
+    worker_model: str = "compound"
     worker_max_tokens: int = 1024
 
     # --- Discovery / search -------------------------------------------------
