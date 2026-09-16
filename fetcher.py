@@ -101,6 +101,15 @@ class NonRetryableHTTPError(Exception):
     pass
 
 
+class RateLimitedError(Exception):
+    """Raised when the server returns 429 Too Many Requests."""
+
+    def __init__(self, retry_after: int):
+        # Default 30 min, max 1 hour
+        self.retry_after = min(max(retry_after, 1), 3600)
+        super().__init__(f"Rate limited, retry after {self.retry_after}s")
+
+
 class Fetcher:
     def __init__(self) -> None:
         self.session = requests.Session(impersonate=settings.impersonate)
@@ -118,6 +127,57 @@ class Fetcher:
             return False
         return not parsed.path.lower().endswith(SKIP_EXTENSIONS)
 
+    @staticmethod
+    def _is_github_repo_url(url: str) -> bool:
+        """Check if URL is a GitHub repo (owner/repo) that we can fetch via API."""
+        parsed = urlparse(url)
+        if parsed.netloc.lower() != "github.com":
+            return False
+        path = parsed.path.strip("/")
+        # Exclude special paths
+        if path.startswith(("topics/", "search", "orgs/")):
+            return False
+        # Repo path should be exactly "owner/repo" (2 segments)
+        segments = [s for s in path.split("/") if s]
+        return len(segments) == 2
+
+    def _fetch_github_repo(self, url: str) -> Optional[FetchResult]:
+        """Fetch GitHub repo data via API. Returns None on failure (fallback to HTML)."""
+        parsed = urlparse(url)
+        path = parsed.path.strip("/")
+        api_url = f"https://api.github.com/repos/{path}"
+        headers = {"Accept": "application/vnd.github+json"}
+        try:
+            resp = self.session.get(api_url, headers=headers, timeout=settings.fetch_timeout)
+            if resp.status_code == 403:
+                # Rate limited - no Retry-After header on GitHub API typically
+                logger.warning("github_api_rate_limited", url=url)
+                return None
+            if resp.status_code != 200:
+                return None
+            data = resp.json()
+            # Build rich text from API response
+            text_parts = [
+                f"Repository: {data.get('full_name', '')}",
+                f"Description: {data.get('description', 'No description')}",
+                f"Stars: {data.get('stargazers_count', 0)}",
+                f"Language: {data.get('language', 'Unknown')}",
+                f"Topics: {', '.join(data.get('topics', []))}",
+                f"License: {data.get('license', {}).get('name', 'None') if data.get('license') else 'None'}",
+                f"URL: {data.get('html_url', '')}",
+            ]
+            text = "\n".join(text_parts)
+            return FetchResult(
+                url=url,
+                status_code=200,
+                text=text,
+                links=[data.get("html_url", "")] if data.get("html_url") else [],
+                title=data.get("full_name", ""),
+            )
+        except Exception as exc:
+            logger.debug("github_api_fetch_failed", url=url, error=str(exc))
+            return None
+
     def is_allowed(self, url: str) -> bool:
         return self.robots.allowed(url)
 
@@ -133,12 +193,31 @@ class Fetcher:
         logger.info("fetching_url", url=url)
         self.throttle.mark(self.host_of(url))
 
+        # GitHub repo optimization: try API first for owner/repo URLs
+        if self._is_github_repo_url(url):
+            api_result = self._fetch_github_repo(url)
+            if api_result:
+                logger.info("github_api_success", url=url)
+                return api_result
+            logger.info("github_api_fallback", url=url)
+
         if "medium.com" in url or "pub.towardsai.net" in url:
             raise NonRetryableHTTPError("Medium domains are blocked by default")
 
         response = self.session.get(url, timeout=settings.fetch_timeout)
 
-        if response.status_code in [401, 403, 404, 429]:
+        # Check for 429 BEFORE the 4xx check
+        if response.status_code == 429:
+            retry_after = 1800  # default 30 minutes
+            retry_header = response.headers.get("Retry-After")
+            if retry_header:
+                try:
+                    retry_after = int(retry_header)
+                except ValueError:
+                    pass
+            raise RateLimitedError(retry_after)
+
+        if response.status_code in [401, 403, 404]:
             raise NonRetryableHTTPError(f"Non-retryable HTTP {response.status_code}")
 
         response.raise_for_status()

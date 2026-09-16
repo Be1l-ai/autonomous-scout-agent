@@ -19,12 +19,29 @@ import structlog
 from config import settings
 from db import Database
 from discovery import Discovery
-from fetcher import Fetcher
+from fetcher import Fetcher, RateLimitedError
 from schemas import ScoutDecision
 from scout import Scout
 from worker import Worker
 
 logger = structlog.get_logger()
+
+# Priority hints: URLs containing these paths get higher priority (lower number)
+LIST_HINTS = (
+    "/list",
+    "/awesome",
+    "/awesome-",
+    "/resources",
+    "/tools",
+    "/projects",
+    "/repositories",
+    "/awesome-list",
+    "/curated",
+    "/index",
+    "/catalog",
+    "/directory",
+    "/landscape",
+)
 
 
 class Orchestrator:
@@ -75,6 +92,17 @@ class Orchestrator:
         added = sum(int(self.db.add_url(u, depth=0)) for u in urls if self._in_scope(u))
         logger.info("discovery_queued", found=len(urls), added=added)
         return added
+
+    @staticmethod
+    def priority_for(url: str) -> int:
+        """Return priority for a URL (1=highest, 5=lowest)."""
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        path = parsed.path.lower()
+        for hint in LIST_HINTS:
+            if hint in path:
+                return 1
+        return 5
 
     def status(self) -> Dict[str, Any]:
         return {
@@ -133,6 +161,12 @@ class Orchestrator:
 
             try:
                 self._process_task(task)
+            except RateLimitedError as exc:
+                self.last_error = str(exc)
+                logger.warning("rate_limited", url=task.get("url"), cooldown=exc.retry_after)
+                self.db.requeue_later(task["url"], exc.retry_after)
+                # Do NOT increment pages_processed for rate-limited tasks
+                continue
             except Exception as exc:
                 self.last_error = str(exc)
                 logger.error("task_failed", url=task.get("url"), error=str(exc))
@@ -220,7 +254,8 @@ class Orchestrator:
             host = (urlparse(link).hostname or "").lower()
             if seen_hosts.get(host, 0) >= 5:
                 continue
-            if self.db.add_url(link, depth=depth + 1):
+            priority = self.priority_for(link)
+            if self.db.add_url(link, depth=depth + 1, priority=priority):
                 seen_hosts[host] = seen_hosts.get(host, 0) + 1
                 queued += 1
         logger.info("links_queued", url=page.url, count=queued)
