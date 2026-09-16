@@ -49,7 +49,9 @@ class Database:
                     type TEXT,
                     status TEXT,
                     depth INTEGER DEFAULT 0,
-                    created_at REAL
+                    created_at REAL,
+                    next_attempt_at REAL DEFAULT 0,
+                    priority INTEGER DEFAULT 5
                 );
                 -- `seen` is permanent: queue rows are deleted on completion, so
                 -- without this the crawler would happily re-visit forever.
@@ -75,12 +77,14 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_queue_status ON queue(status);
                 CREATE INDEX IF NOT EXISTS idx_queue_domain ON queue(domain);
                 CREATE INDEX IF NOT EXISTS idx_results_created ON results(created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_queue_next_attempt ON queue(next_attempt_at);
+                CREATE INDEX IF NOT EXISTS idx_queue_priority ON queue(priority);
                 """
             )
             self.conn.commit()
 
-    # --- queue -------------------------------------------------------------
-    def add_url(self, url: str, task_type: str = "FETCH_URL", depth: int = 0) -> bool:
+# --- queue -------------------------------------------------------------
+    def add_url(self, url: str, task_type: str = "FETCH_URL", depth: int = 0, priority: int = 5) -> bool:
         if settings.max_depth and depth > settings.max_depth:
             return False
         domain = host_of(url)
@@ -101,9 +105,9 @@ class Database:
                 if row and row["pages"] >= settings.max_pages_per_domain:
                     return False
             cur.execute(
-                "INSERT OR IGNORE INTO queue (id, url, domain, type, status, depth, created_at) "
-                "VALUES (?, ?, ?, ?, 'pending', ?, ?)",
-                (str(uuid.uuid4()), url, domain, task_type, depth, time.time()),
+                "INSERT OR IGNORE INTO queue (id, url, domain, type, status, depth, created_at, next_attempt_at, priority) "
+                "VALUES (?, ?, ?, ?, 'pending', ?, ?, 0, ?)",
+                (str(uuid.uuid4()), url, domain, task_type, depth, time.time(), priority),
             )
             self.conn.commit()
             return cur.rowcount > 0
@@ -118,11 +122,11 @@ class Database:
         with self._lock:
             rows = self.conn.execute(
                 """
-                SELECT q.id, q.url, q.type, q.depth, COALESCE(d.pages, 0) AS domain_pages
+                SELECT q.id, q.url, q.type, q.depth, q.priority, COALESCE(d.pages, 0) AS domain_pages
                 FROM queue q
                 LEFT JOIN domains d ON d.domain = q.domain
                 WHERE q.status='pending'
-                ORDER BY domain_pages ASC, q.depth ASC, q.created_at ASC
+                ORDER BY q.priority ASC, domain_pages ASC, q.depth ASC, q.created_at ASC
                 LIMIT ?
                 """,
                 (limit,),
@@ -143,12 +147,36 @@ class Database:
         self, ready: Optional[Callable[[str], bool]] = None
     ) -> Optional[Dict[str, Any]]:
         """Claim the best pending task whose host is off cooldown."""
-        for task in self.next_candidates():
+        now = time.time()
+        with self._lock:
+            rows = self.conn.execute(
+                """
+                SELECT q.id, q.url, q.type, q.depth, q.priority, COALESCE(d.pages, 0) AS domain_pages
+                FROM queue q
+                LEFT JOIN domains d ON d.domain = q.domain
+                WHERE q.status='pending' AND q.next_attempt_at <= ?
+                ORDER BY q.priority ASC, domain_pages ASC, q.depth ASC, q.created_at ASC
+                LIMIT 25
+                """,
+                (now,),
+            ).fetchall()
+        for task in (dict(r) for r in rows):
             if ready and not ready(task["url"]):
                 continue
             if self.claim(task["id"]):
                 return task
         return None
+
+    def requeue_later(self, url: str, seconds: int) -> bool:
+        """Requeue a URL with a delayed next_attempt_at."""
+        with self._lock:
+            cur = self.conn.cursor()
+            cur.execute(
+                "UPDATE queue SET status='pending', next_attempt_at=? WHERE url=?",
+                (time.time() + seconds, url),
+            )
+            self.conn.commit()
+            return cur.rowcount > 0
 
     def complete_task(self, task_id: str, url: Optional[str] = None) -> None:
         with self._lock:
