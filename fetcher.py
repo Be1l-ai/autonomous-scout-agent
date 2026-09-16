@@ -18,7 +18,8 @@ from urllib.parse import urldefrag, urljoin, urlparse
 import structlog
 from bs4 import BeautifulSoup
 from curl_cffi import requests
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+import trafilatura
 
 from config import settings
 from schemas import FetchResult
@@ -96,6 +97,10 @@ class DomainThrottle:
             self._last_hit[host] = time.time()
 
 
+class NonRetryableHTTPError(Exception):
+    pass
+
+
 class Fetcher:
     def __init__(self) -> None:
         self.session = requests.Session(impersonate=settings.impersonate)
@@ -120,15 +125,22 @@ class Fetcher:
         return self.throttle.ready(self.host_of(url))
 
     @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=2, max=10),
-        reraise=True,
+        stop=stop_after_attempt(2),
+        wait=wait_exponential(multiplier=1, min=2, max=5),
+        retry=retry_if_exception_type((requests.exceptions.Timeout, requests.exceptions.ConnectionError))
     )
     def fetch_and_parse(self, url: str) -> FetchResult:
         logger.info("fetching_url", url=url)
         self.throttle.mark(self.host_of(url))
 
+        if "medium.com" in url or "pub.towardsai.net" in url:
+            raise NonRetryableHTTPError("Medium domains are blocked by default")
+
         response = self.session.get(url, timeout=settings.fetch_timeout)
+
+        if response.status_code in [401, 403, 404, 429]:
+            raise NonRetryableHTTPError(f"Non-retryable HTTP {response.status_code}")
+
         response.raise_for_status()
 
         content_type = (response.headers.get("content-type") or "").lower()
@@ -137,12 +149,21 @@ class Fetcher:
         if len(response.content) > settings.max_content_bytes:
             raise ValueError(f"page too large: {len(response.content)} bytes")
 
-        soup = BeautifulSoup(response.content, "lxml")
-        for tag in soup(list(NOISE_TAGS)):
-            tag.extract()
+        # 1. Extract clean main content (ignores nav, footers, ads)
+        text = trafilatura.extract(response.content, include_comments=False, include_tables=True)
 
+        # 2. Fallback to BS4 if trafilatura fails
+        if not text:
+            soup = BeautifulSoup(response.content, "lxml")
+            for tag in soup(list(NOISE_TAGS)):
+                tag.extract()
+            text = soup.get_text(separator=" ", strip=True)
+
+        # 3. Increase limit since boilerplate is removed
+        text = text[:12000]
+
+        soup = BeautifulSoup(response.content, "lxml")
         title = soup.title.get_text(strip=True) if soup.title else ""
-        text = soup.get_text(separator=" ", strip=True)[: settings.max_page_chars]
 
         links = []
         seen = set()
