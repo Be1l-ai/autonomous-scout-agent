@@ -89,7 +89,16 @@ class Scout:
 
         logger.debug("scout_raw_output", raw=raw)
         try:
-            return ScoutDecision(**json.loads(raw))
+            data = json.loads(raw)
+
+            # SANITIZER: Strip out empty dictionaries hallucinated by small models
+            if "next_actions" in data and isinstance(data["next_actions"], list):
+                data["next_actions"] = [
+                    action for action in data["next_actions"]
+                    if action and isinstance(action, dict) and "type" in action
+                ]
+
+            return ScoutDecision(**data)
         except Exception as exc:
             logger.error("scout_json_parse_error", error=str(exc), raw=raw[:400])
             return ScoutDecision(reason="Failed to parse scout JSON")
