@@ -11,7 +11,7 @@ import logging
 from contextlib import asynccontextmanager
 
 import structlog
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query, Depends
 from fastapi.responses import HTMLResponse
 
 from config import settings
@@ -34,6 +34,19 @@ logger = structlog.get_logger()
 orchestrator = Orchestrator()
 
 
+def control_auth(token: str = Query(None)):
+    """Control plane authentication.
+    
+    If CONTROL_TOKEN is not set, allow access (dev mode).
+    If token doesn't match, raise 401.
+    """
+    if not settings.control_token:
+        return True  # dev mode
+    if token != settings.control_token:
+        raise HTTPException(status_code=401, detail="Invalid control token")
+    return True
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if settings.autostart:
@@ -47,17 +60,18 @@ app = FastAPI(title="Autonomous Scout Agent", version="1.0.0", lifespan=lifespan
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
 def dashboard() -> str:
-    return """<!doctype html><html><head><meta charset="utf-8">
+    return f"""<!doctype html><html><head><meta charset="utf-8">
+<meta name="control-token" content="{settings.control_token}">
 <title>Scout Agent</title>
 <style>
- body{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#0d1117;color:#c9d1d9;
-      margin:0;padding:2rem;line-height:1.6}
- h1{color:#58a6ff;font-size:1.25rem;margin:0 0 1rem}
- pre{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:1rem;overflow:auto}
- a{color:#58a6ff} .row{display:flex;gap:1rem;flex-wrap:wrap}
- button{background:#21262d;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;
-        padding:.4rem .8rem;cursor:pointer}
- button:hover{border-color:#58a6ff}
+ body{{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#0d1117;color:#c9d1d9;
+      margin:0;padding:2rem;line-height:1.6}}
+ h1{{color:#58a6ff;font-size:1.25rem;margin:0 0 1rem}}
+ pre{{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:1rem;overflow:auto}}
+ a{{color:#58a6ff}} .row{{display:flex;gap:1rem;flex-wrap:wrap}}
+ button{{background:#21262d;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;
+        padding:.4rem .8rem;cursor:pointer}}
+ button:hover{{border-color:#58a6ff}}
 </style></head><body>
 <h1>Autonomous Scout Agent</h1>
 <div class="row">
@@ -71,17 +85,26 @@ def dashboard() -> str:
 <h2 style="font-size:1rem">findings</h2><pre id="r">loading…</pre>
 <h2 style="font-size:1rem">domains</h2><pre id="d">loading…</pre>
 <script>
-async function tick(){
-  try{
+function getToken() {{
+  const meta = document.querySelector('meta[name="control-token"]');
+  return meta ? meta.getAttribute('content') : '';
+}}
+async function tick(){{
+  try{{
     document.getElementById('s').textContent =
       JSON.stringify(await (await fetch('/stats')).json(),null,2);
     document.getElementById('r').textContent =
       JSON.stringify(await (await fetch('/results?only_with_items=true&limit=10')).json(),null,2);
     document.getElementById('d').textContent =
       JSON.stringify(await (await fetch('/domains?limit=15')).json(),null,2);
-  }catch(e){}
-}
-async function ctl(p){ await fetch('/'+p,{method:'POST'}); tick(); }
+  }}catch(e){{}}
+}}
+async function ctl(p){{
+  const token = getToken();
+  const url = token ? '/' + p + '?token=' + encodeURIComponent(token) : '/' + p;
+  await fetch(url, {{method:'POST'}});
+  tick();
+}}
 tick(); setInterval(tick,5000);
 </script></body></html>"""
 
@@ -120,7 +143,7 @@ def domains(limit: int = 20):
 
 
 @app.post("/discover")
-def discover():
+def discover(_: bool = Depends(control_auth)):
     """Run the search queries now and queue whatever comes back."""
     if not orchestrator.discovery.enabled:
         raise HTTPException(
@@ -132,13 +155,13 @@ def discover():
 
 
 @app.post("/pause")
-def pause():
+def pause(_: bool = Depends(control_auth)):
     orchestrator.pause()
     return {"paused": True}
 
 
 @app.post("/resume")
-def resume():
+def resume(_: bool = Depends(control_auth)):
     if not orchestrator.running:
         orchestrator.start()
     orchestrator.resume()
@@ -146,18 +169,27 @@ def resume():
 
 
 @app.post("/seed")
-def seed(req: SeedRequest | None = None):
+def seed(req: SeedRequest | None = None, _: bool = Depends(control_auth)):
     urls = req.urls if req and req.urls else None
     return {"added": orchestrator.seed(urls)}
 
 
 @app.post("/goal")
-def set_goal(update: GoalUpdate):
+def set_goal(update: GoalUpdate, _: bool = Depends(control_auth)):
     if not update.goal.strip():
         raise HTTPException(status_code=400, detail="goal must not be empty")
     settings.current_goal = update.goal.strip()
     logger.info("goal_updated", goal=settings.current_goal)
     return {"goal": settings.current_goal}
+
+
+@app.post("/worker/test")
+def worker_test(url: str, _: bool = Depends(control_auth)):
+    """Smoke test: fetch a URL and run the worker on it."""
+    fd = orchestrator.fetcher.fetch_and_parse(url)
+    res = orchestrator.worker.execute(url, fd.text[:8000], settings.current_goal)
+    orchestrator.db.save_result(url, {"manual_test": True}, res.model_dump())
+    return res.model_dump()
 
 
 if __name__ == "__main__":
