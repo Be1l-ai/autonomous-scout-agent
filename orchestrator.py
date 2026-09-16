@@ -167,6 +167,13 @@ class Orchestrator:
 
         page = self.fetcher.fetch_and_parse(url)
         decision: ScoutDecision = self.scout.decide(url, page.text, page.title)
+
+        if not decision.relevant:
+            decision.needs_worker = False
+            decision.next_actions = [
+                a for a in decision.next_actions if a.type != "call_worker"
+            ]
+
         logger.info(
             "scout_decision",
             url=url,
