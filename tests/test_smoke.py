@@ -184,3 +184,35 @@ def test_control_auth_modes():
     finally:
         settings.control_token = original
 
+
+def test_worker_model_is_valid_groq_id():
+    """Guards against a repeat of the bare-'compound' 404: that ID shipped as
+    the default and every worker call 404'd in production."""
+    from config import settings
+
+    valid = {
+        "groq/compound",
+        "groq/compound-mini",
+        "llama-3.1-8b-instant",
+        "llama-3.3-70b-versatile",
+        "openai/gpt-oss-120b",
+        "openai/gpt-oss-20b",
+    }
+    assert settings.worker_model in valid
+
+
+def test_scout_prompt_forces_delegation():
+    """The template must tell the scout to delegate listicles to the worker,
+    and must still format cleanly (the JSON-schema braces are escaped)."""
+    from scout import USER_TEMPLATE
+
+    rendered = USER_TEMPLATE.format(
+        goal="find frameworks", url="https://example.com", title="t", text="c"
+    )
+    lowered = rendered.lower()
+    assert "needs_worker" in lowered
+    assert "listicle" in lowered
+    assert "critical rule for delegation" in lowered
+    # The schema example survived formatting with literal braces intact.
+    assert '"needs_worker": true|false' in rendered
+
