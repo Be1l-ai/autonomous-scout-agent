@@ -18,7 +18,7 @@ from urllib.parse import urldefrag, urljoin, urlparse
 import structlog
 from bs4 import BeautifulSoup
 from curl_cffi import requests
-from curl_cffi.requests.errors import Timeout, ConnectionError
+from curl_cffi.requests.exceptions import Timeout, ConnectionError
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 import trafilatura
 
