@@ -224,6 +224,12 @@ class Orchestrator:
                 (a.task for a in decision.next_actions if a.type == "call_worker" and a.task),
                 settings.current_goal,
             )
+            logger.info(
+                "worker_input_stats",
+                url=url,
+                text_length=len(page.text),
+                title=page.title,
+            )
             worker_result = self.worker.execute(url, page.text, task_desc)
             logger.info("worker_done", url=url, items=len(worker_result.items))
 

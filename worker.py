@@ -67,7 +67,15 @@ class Worker:
                 response_format={"type": "json_object"},
                 extra_body={"compound_custom": {"tools": {"enabled_tools": []}}},
             )
-            data = json.loads(completion.choices[0].message.content)
+            raw_json = completion.choices[0].message.content
+            logger.info(
+                "worker_raw_response",
+                url=url,
+                model=settings.worker_model,
+                usage_tokens=completion.usage.total_tokens if completion.usage else None,
+                raw=raw_json,
+            )
+            data = json.loads(raw_json)
             return WorkerResult(**data)
         except Exception as exc:
             logger.error("worker_failed", url=url, error=str(exc))
