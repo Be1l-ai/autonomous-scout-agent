@@ -8,10 +8,11 @@ Spaces marks a Space unhealthy if the port doesn't bind fast enough.
 from __future__ import annotations
 
 import logging
+import secrets
 from contextlib import asynccontextmanager
 
 import structlog
-from fastapi import FastAPI, HTTPException, Query, Depends
+from fastapi import FastAPI, HTTPException, Query, Depends, Header
 from fastapi.responses import HTMLResponse
 
 from config import settings
@@ -34,15 +35,21 @@ logger = structlog.get_logger()
 orchestrator = Orchestrator()
 
 
-def control_auth(token: str = Query(None)):
+def control_auth(
+    x_control_token: str | None = Header(None),
+    token: str | None = Query(None),
+):
     """Control plane authentication.
     
     If CONTROL_TOKEN is not set, allow access (dev mode).
-    If token doesn't match, raise 401.
+    Otherwise 401 on mismatch, compared constant-time.
     """
     if not settings.control_token:
         return True  # dev mode
-    if token != settings.control_token:
+    supplied = x_control_token or token
+    if not supplied or not secrets.compare_digest(
+        supplied.encode("utf-8"), settings.control_token.encode("utf-8")
+    ):
         raise HTTPException(status_code=401, detail="Invalid control token")
     return True
 
@@ -61,7 +68,6 @@ app = FastAPI(title="Autonomous Scout Agent", version="1.0.0", lifespan=lifespan
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
 def dashboard() -> str:
     return f"""<!doctype html><html><head><meta charset="utf-8">
-<meta name="control-token" content="{settings.control_token}">
 <title>Scout Agent</title>
 <style>
  body{{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#0d1117;color:#c9d1d9;
@@ -72,8 +78,14 @@ def dashboard() -> str:
  button{{background:#21262d;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;
         padding:.4rem .8rem;cursor:pointer}}
  button:hover{{border-color:#58a6ff}}
+ input{{background:#161b22;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;
+        padding:.4rem .6rem}}
 </style></head><body>
 <h1>Autonomous Scout Agent</h1>
+<div class="row">
+  <input id="tok" type="password" placeholder="control token (saved in this browser)" size="32">
+  <button onclick="saveTok()">save token</button>
+</div>
 <div class="row">
   <button onclick="ctl('pause')">pause</button>
   <button onclick="ctl('resume')">resume</button>
@@ -86,8 +98,10 @@ def dashboard() -> str:
 <h2 style="font-size:1rem">domains</h2><pre id="d">loading…</pre>
 <script>
 function getToken() {{
-  const meta = document.querySelector('meta[name="control-token"]');
-  return meta ? meta.getAttribute('content') : '';
+  return localStorage.getItem('scout_token') || '';
+}}
+function saveTok() {{
+  localStorage.setItem('scout_token', document.getElementById('tok').value.trim());
 }}
 async function tick(){{
   try{{
@@ -100,12 +114,13 @@ async function tick(){{
   }}catch(e){{}}
 }}
 async function ctl(p){{
-  const token = getToken();
-  const url = token ? '/' + p + '?token=' + encodeURIComponent(token) : '/' + p;
-  await fetch(url, {{method:'POST'}});
+  const res = await fetch('/' + p,
+    {{method:'POST', headers:{{'X-Control-Token': getToken()}}}});
+  if (res.status === 401) alert('401: control token missing or wrong. Paste it above and save.');
   tick();
 }}
 tick(); setInterval(tick,5000);
+document.getElementById('tok').value = getToken();
 </script></body></html>"""
 
 
