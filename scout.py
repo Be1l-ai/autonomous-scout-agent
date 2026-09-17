@@ -24,8 +24,15 @@ SYSTEM_PROMPT = (
 USER_TEMPLATE = """Current goal: {goal}
 
 Decide whether this page is relevant to the goal, and whether it needs the
-expensive extraction worker (only when the page actually contains the data we
-want, not just links to it).
+expensive extraction worker.
+
+CRITICAL RULE FOR DELEGATION:
+If the page is a LISTICLE, COMPARISON, DIRECTORY, or "AWESOME" list containing
+multiple relevant items, you MUST set "needs_worker": true. Do NOT just extract
+the links yourself — the worker needs to read the full text to extract
+structured data (names, descriptions, URLs) for the database. Only set
+"needs_worker": false if the page is a single product homepage, irrelevant,
+or a dead end.
 
 Reply with JSON exactly matching this schema:
 {{"relevant": true|false,
