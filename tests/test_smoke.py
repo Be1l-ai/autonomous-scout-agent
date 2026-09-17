@@ -254,6 +254,8 @@ def test_enriched_results_roundtrip(db):
 def test_search_github_repo_parses_hit_and_survives_403():
     """Resolver: parse the top hit, degrade to Nones on rate-limit, and skip
     the API entirely for names too short to be a valid search query."""
+    from urllib.parse import unquote
+
     from fetcher import Fetcher
 
     fetcher = Fetcher.__new__(Fetcher)  # skip __init__: no real network setup
@@ -292,7 +294,9 @@ def test_search_github_repo_parses_hit_and_survives_403():
     assert hit["github_url"] == "https://github.com/crewAIInc/crewAI"
     assert hit["stars"] == 25000
     assert hit["official_description"] == "multi-agent framework"
-    assert "in:name" in fetcher.session.calls[0]
+    # The query URL is percent-encoded (space -> %20, colon -> %3A); compare
+    # decoded so the assertion holds regardless of encoding choices.
+    assert "in:name" in unquote(fetcher.session.calls[0])
 
     rate_limited = fetcher.search_github_repo("CrewAI")
     assert rate_limited == {
