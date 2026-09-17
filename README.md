@@ -20,14 +20,14 @@ seed URL ──> fetcher ──> SCOUT (Qwen2.5-1.5B, local CPU)
                             │
               relevant? ────┼──── no  ──> drop
                             │
-                            ├── yes, needs extraction ──> WORKER (Groq Llama 3.1 8B) ──> results
+                            ├── yes, needs extraction ──> WORKER (Groq compound-mini) ──> results
                             └── yes, just navigation  ──> queue discovered links
 ```
 
 | Layer | Model | Runs on | Cost |
 |---|---|---|---|
 | Scout | Qwen2.5-1.5B-Instruct (Q4_K_M GGUF) | local CPU, llama.cpp | free |
-| Worker | llama-3.1-8b-instant | Groq API | free tier |
+| Worker | groq/compound-mini (JSON mode, built-in tools off) | Groq API | free tier |
 
 ## API keys
 
