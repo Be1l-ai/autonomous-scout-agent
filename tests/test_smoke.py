@@ -150,3 +150,37 @@ def test_scout_falls_back_on_bad_json():
     decision = scout.decide("https://example.com", "text")
     assert decision.relevant is False
     assert decision.confidence == 0.0
+
+
+def test_control_auth_modes():
+    """Header-first auth with constant-time compare; empty token = dev mode.
+
+    Calls control_auth() directly — no TestClient, matching how this suite
+    tests Orchestrator._in_scope and Scout. Importing main instantiates the
+    module-level Orchestrator, so ./data/agent_state.db gets created in the
+    working dir; harmless in CI since no threads start (start() runs only in
+    the app lifespan or /resume).
+    """
+    from fastapi import HTTPException
+
+    import main
+
+    original = settings.control_token
+    try:
+        settings.control_token = ""  # dev mode: everything open
+        assert main.control_auth(x_control_token=None, token=None) is True
+
+        settings.control_token = "s3cret-token"
+        assert main.control_auth(x_control_token="s3cret-token", token=None) is True
+        assert main.control_auth(x_control_token=None, token="s3cret-token") is True
+
+        with pytest.raises(HTTPException) as exc:
+            main.control_auth(x_control_token="wrong", token=None)
+        assert exc.value.status_code == 401
+
+        with pytest.raises(HTTPException) as exc:
+            main.control_auth(x_control_token=None, token=None)
+        assert exc.value.status_code == 401
+    finally:
+        settings.control_token = original
+
