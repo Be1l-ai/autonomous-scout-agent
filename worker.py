@@ -21,8 +21,15 @@ Source URL: {url}
 Extract the requested information from the content below. Do not invent
 entries; if nothing matches, return an empty items list.
 
+CRITICAL RULE FOR URLS:
+The cleaned article text often mentions frameworks or tools by name without
+their GitHub or product links (page navigation was stripped). Extract every
+relevant item you find. Set "url" to a repository/product link ONLY if the
+literal URL appears in the text; otherwise set "url": null. NEVER omit an
+item just because its URL is missing.
+
 Reply with JSON exactly matching this schema:
-{{"items": [{{"name": "string", "url": "string", "description": "string"}}],
+{{"items": [{{"name": "string", "url": "string or null", "description": "string"}}],
   "summary": "string",
   "confidence": 0.0-1.0,
   "next_tasks": ["string"]}}

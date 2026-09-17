@@ -64,6 +64,10 @@ class Settings(BaseSettings):
     worker_model: str = "groq/compound-mini"
     worker_max_tokens: int = 1024
 
+    # Optional GitHub token (no scopes needed) — raises the Search API limit
+    # from 10 to 30 req/min when resolving repo URLs for extracted items.
+    github_token: str = ""
+
     # --- Discovery / search -------------------------------------------------
     # How the agent finds NEW starting points instead of only following links.
     # One of: none | brave | tavily | searxng

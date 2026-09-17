@@ -34,6 +34,7 @@ seed URL ──> fetcher ──> SCOUT (Qwen2.5-1.5B, local CPU)
 | Key | Needed? | Where | Free tier |
 |---|---|---|---|
 | `WORKER_API_KEY` | **yes** | [console.groq.com/keys](https://console.groq.com/keys) | generous |
+| `GITHUB_TOKEN` | no — but speeds up item link resolution | [github.com/settings/tokens](https://github.com/settings/tokens) (no scopes) | 30 search req/min vs 10 |
 | `SEARCH_API_KEY` | only for open-web exploration | Brave or Tavily (below) | 1–2k queries/mo |
 
 Without `WORKER_API_KEY` the agent still crawls and triages, but every page

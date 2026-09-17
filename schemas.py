@@ -21,7 +21,7 @@ class ScoutDecision(BaseModel):
 
 class WorkerItem(BaseModel):
     name: str = ""
-    url: str = ""
+    url: Optional[str] = None
     description: str = ""
 
 
