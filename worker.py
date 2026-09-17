@@ -1,5 +1,6 @@
 """The expensive, capable extractor. Called only when the scout says a page is
-worth it. Backed by Groq (Llama 3.1 8B Instant) with JSON mode."""
+worth it. Backed by Groq — default groq/compound-mini, JSON mode. Built-in
+compound tools (web search etc.) are disabled: the page text is already here."""
 
 from __future__ import annotations
 
@@ -46,6 +47,10 @@ class Worker:
             return WorkerResult(summary="Skipped: WORKER_API_KEY not set")
 
         logger.info("worker_executing", url=url, task=task_description)
+        # compound_custom disables the compound systems' built-in tools (web
+        # search, code execution): this worker extracts from the text we give
+        # it. Sent via extra_body so it works on any pinned groq SDK version;
+        # plain-LLM models ignore the unknown field.
         try:
             completion = self.client.chat.completions.create(
                 model=settings.worker_model,
@@ -60,6 +65,7 @@ class Worker:
                 temperature=0.1,
                 max_tokens=settings.worker_max_tokens,
                 response_format={"type": "json_object"},
+                extra_body={"compound_custom": {"tools": {"enabled_tools": []}}},
             )
             data = json.loads(completion.choices[0].message.content)
             return WorkerResult(**data)
