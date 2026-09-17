@@ -13,7 +13,7 @@ import threading
 import time
 import urllib.robotparser as robotparser
 from typing import Dict, Optional
-from urllib.parse import urldefrag, urljoin, urlparse
+from urllib.parse import quote, urldefrag, urljoin, urlparse
 
 import structlog
 from bs4 import BeautifulSoup
@@ -178,6 +178,46 @@ class Fetcher:
         except Exception as exc:
             logger.debug("github_api_fetch_failed", url=url, error=str(exc))
             return None
+
+    def search_github_repo(self, name: str) -> dict:
+        """Search GitHub for the most-starred repo matching a tool name.
+
+        Resolves worker items that came back without a URL. Returns
+        {github_url, stars, official_description} — all None when the search
+        finds nothing, is rate-limited, or errors (mirrors _fetch_github_repo).
+        The Search API allows 10 req/min unauthenticated (30 with
+        GITHUB_TOKEN); the caller is responsible for sleeping between calls.
+        """
+        empty = {"github_url": None, "stars": None, "official_description": None}
+        if len(name) < 3:  # sub-3-char queries are 422 bait ("ai")
+            return empty
+        query = quote(f"{name} in:name")
+        api_url = (
+            "https://api.github.com/search/repositories"
+            f"?q={query}&sort=stars&order=desc&per_page=1"
+        )
+        headers = {"Accept": "application/vnd.github+json"}
+        if settings.github_token:
+            headers["Authorization"] = f"Bearer {settings.github_token}"
+        try:
+            resp = self.session.get(api_url, headers=headers, timeout=10)
+            if resp.status_code != 200:
+                logger.warning(
+                    "github_search_failed", tool=name, status=resp.status_code
+                )
+                return empty
+            items = resp.json().get("items") or []
+            if not items:
+                return empty
+            top = items[0]
+            return {
+                "github_url": top.get("html_url"),
+                "stars": top.get("stargazers_count"),
+                "official_description": top.get("description"),
+            }
+        except Exception as exc:
+            logger.warning("github_search_failed", tool=name, error=str(exc))
+            return empty
 
     def is_allowed(self, url: str) -> bool:
         return self.robots.allowed(url)
