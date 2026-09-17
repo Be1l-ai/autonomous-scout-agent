@@ -20,7 +20,7 @@ from config import settings
 from db import Database
 from discovery import Discovery
 from fetcher import Fetcher, RateLimitedError
-from schemas import ScoutDecision
+from schemas import ScoutDecision, WorkerResult
 from scout import Scout
 from worker import Worker
 
@@ -42,6 +42,10 @@ LIST_HINTS = (
     "/directory",
     "/landscape",
 )
+
+# Cap on GitHub Search lookups per page: a link-free listicle can name dozens
+# of tools, and the unauthenticated Search API only allows 10 req/min.
+MAX_URL_RESOLUTIONS_PER_PAGE = 8
 
 
 class Orchestrator:
@@ -218,7 +222,7 @@ class Orchestrator:
 
         confident = decision.confidence >= settings.scout_min_confidence
 
-        worker_result = None
+        worker_res: Optional[Dict[str, Any]] = None
         if decision.relevant and decision.needs_worker and confident:
             task_desc = next(
                 (a.task for a in decision.next_actions if a.type == "call_worker" and a.task),
@@ -232,6 +236,7 @@ class Orchestrator:
             )
             worker_result = self.worker.execute(url, page.text, task_desc)
             logger.info("worker_done", url=url, items=len(worker_result.items))
+            worker_res = self._resolve_missing_urls(worker_result, url)
 
         if decision.relevant:
             self._queue_links(decision, page, depth)
@@ -239,9 +244,46 @@ class Orchestrator:
         self.db.save_result(
             url=url,
             scout_dec=decision.model_dump(),
-            worker_res=worker_result.model_dump() if worker_result else None,
+            worker_res=worker_res,
             title=page.title,
         )
+
+    def _resolve_missing_urls(
+        self, worker_result: WorkerResult, source_url: str
+    ) -> Dict[str, Any]:
+        """Fill in repo links the worker couldn't find — article text is
+        nav-stripped, so GitHub links are usually absent — via the GitHub
+        Search API, and stamp provenance on every item. Only items WITHOUT a
+        url hit the API; the rest keep whatever the worker found in the text.
+        """
+        out = worker_result.model_dump()
+        missing = [i for i in out["items"] if not i.get("url")]
+        if missing:
+            resolve = missing[:MAX_URL_RESOLUTIONS_PER_PAGE]
+            logger.info(
+                "resolving_github_urls", url=source_url, count=len(resolve)
+            )
+            # Search API: 30 req/min with a token, 10 req/min without.
+            delay = 3.0 if settings.github_token else 7.0
+            found = 0
+            for item in resolve:
+                time.sleep(delay)
+                gh = self.fetcher.search_github_repo(item["name"])
+                item["github_url"] = gh["github_url"]
+                item["stars"] = gh["stars"]
+                item["official_description"] = gh["official_description"]
+                if gh["github_url"]:
+                    item["url"] = gh["github_url"]
+                    found += 1
+            logger.info(
+                "resolved_github_urls",
+                url=source_url,
+                found=found,
+                items=len(out["items"]),
+            )
+        for item in out["items"]:
+            item["source_article_url"] = source_url
+        return out
 
     def _queue_links(self, decision: ScoutDecision, page, depth: int) -> None:
         queued = 0
