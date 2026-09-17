@@ -216,3 +216,91 @@ def test_scout_prompt_forces_delegation():
     # The schema example survived formatting with literal braces intact.
     assert '"needs_worker": true|false' in rendered
 
+
+def test_worker_item_allows_missing_url():
+    """A url-less item must validate — the whole point of the schema relax."""
+    from schemas import WorkerItem, WorkerResult
+
+    result = WorkerResult(items=[{"name": "CrewAI", "description": "a framework"}])
+    assert result.items[0].url is None
+    assert WorkerItem(name="x", url="", description="d").url == ""
+
+
+def test_enriched_results_roundtrip(db):
+    """The enriched item shape (stars, source_article_url, ...) must survive
+    save_result and pass the dashboard's only_with_items filter."""
+    db.save_result(
+        url="https://example.com/list",
+        scout_dec=ScoutDecision(relevant=True, confidence=0.9).model_dump(),
+        worker_res={
+            "items": [
+                {
+                    "name": "CrewAI",
+                    "url": "https://github.com/crewAIInc/crewAI",
+                    "description": "from the article",
+                    "stars": 25000,
+                    "official_description": "multi-agent framework",
+                    "source_article_url": "https://example.com/list",
+                }
+            ],
+            "summary": "found one",
+        },
+        title="List",
+    )
+    rows = db.recent_results(limit=5, only_with_items=True)
+    assert rows and rows[0]["worker_result"]["items"][0]["stars"] == 25000
+
+
+def test_search_github_repo_parses_hit_and_survives_403():
+    """Resolver: parse the top hit, degrade to Nones on rate-limit, and skip
+    the API entirely for names too short to be a valid search query."""
+    from fetcher import Fetcher
+
+    fetcher = Fetcher.__new__(Fetcher)  # skip __init__: no real network setup
+
+    class Resp:
+        def __init__(self, status_code, payload):
+            self.status_code = status_code
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    class FakeSession:
+        def __init__(self):
+            self.calls = []
+
+        def get(self, url, headers=None, timeout=None):
+            self.calls.append(url)
+            if len(self.calls) == 1:
+                return Resp(
+                    200,
+                    {
+                        "items": [
+                            {
+                                "html_url": "https://github.com/crewAIInc/crewAI",
+                                "stargazers_count": 25000,
+                                "description": "multi-agent framework",
+                            }
+                        ]
+                    },
+                )
+            return Resp(403, {})
+
+    fetcher.session = FakeSession()
+    hit = fetcher.search_github_repo("CrewAI")
+    assert hit["github_url"] == "https://github.com/crewAIInc/crewAI"
+    assert hit["stars"] == 25000
+    assert hit["official_description"] == "multi-agent framework"
+    assert "in:name" in fetcher.session.calls[0]
+
+    rate_limited = fetcher.search_github_repo("CrewAI")
+    assert rate_limited == {
+        "github_url": None,
+        "stars": None,
+        "official_description": None,
+    }
+
+    assert fetcher.search_github_repo("ai")["github_url"] is None
+    assert len(fetcher.session.calls) == 2  # the short name never hit the API
+
